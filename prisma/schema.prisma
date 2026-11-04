@@ -1,0 +1,228 @@
+// Jeevan Jyoti Hospital, Sirsa — Database Schema
+// Provider: MySQL (switch provider string + DATABASE_URL to change DB)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth / Users ----------
+
+model Admin {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("ADMIN") // ADMIN | SUPER_ADMIN
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Patient {
+  id           Int      @id @default(autoincrement())
+  fullName     String
+  mobile       String   @unique // 10-digit Indian mobile, primary login key
+  email        String?
+  passwordHash String?  // null until patient registers / sets password
+  age          Int?
+  gender       String?  // MALE | FEMALE | OTHER
+  address      String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  appointments Appointment[]
+}
+
+// ---------- Hospital domains ----------
+
+model Department {
+  id           Int      @id @default(autoincrement())
+  name         String
+  nameHi       String?  // Hindi line for bilingual UI
+  slug         String   @unique
+  description  String?
+  descriptionHi String?
+  icon         String?  // emoji or icon key
+  highlightDays String? // optional notice, e.g. "OPD every Tue"
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  doctors      Doctor[]
+  appointments Appointment[]
+}
+
+model Doctor {
+  id              Int      @id @default(autoincrement())
+  fullName        String
+  qualification   String?  // e.g. MBBS, MD — use only verified data
+  specialization  String?
+  departmentId    Int?
+  experienceYears Int?
+  bio             String?
+  photoUrl        String?
+  consultationFee Int?
+  // Weekly schedule: availableDays = csv of weekday numbers 0-6 (Sun..Sat)
+  availableDays   String   @default("1,2,3,4,5")
+  // Morning/evening OPD windows as "HH:mm"
+  morningFrom     String   @default("09:00")
+  morningTo       String   @default("13:00")
+  eveningFrom     String?
+  eveningTo       String?
+  slotMinutes     Int      @default(30)
+  maxPerSlot      Int      @default(1) // patients seen per time slot
+  isActive        Boolean  @default(true)
+  isSample        Boolean  @default(true) // true = demo seed data, replace via admin
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  department   Department?   @relation(fields: [departmentId], references: [id])
+  appointments Appointment[]
+  timeSlots    TimeSlot[]
+}
+
+// Extra per-date control: admin can block (holiday/emergency leave)
+// or extend availability for a doctor on a specific date.
+model TimeSlot {
+  id        Int      @id @default(autoincrement())
+  doctorId  Int
+  date      DateTime @db.Date
+  fromTime  String
+  toTime    String
+  kind      String   @default("AVAILABLE") // AVAILABLE | BLOCKED
+  reason    String?
+  createdAt DateTime @default(now())
+
+  doctor Doctor @relation(fields: [doctorId], references: [id])
+
+  @@unique([doctorId, date, fromTime])
+}
+
+// ---------- Appointments ----------
+
+// slotGuard: unique-tuple trick — active bookings use "1"; when an
+// appointment is cancelled the guard becomes "C<id>", releasing the slot
+// while preserving history. Guarantees no double booking at DB level.
+model Appointment {
+  id                Int      @id @default(autoincrement())
+  apptCode          String   @unique // e.g. JJH-8F3K2Q
+  patientId         Int
+  doctorId          Int
+  departmentId      Int?
+  fullName          String
+  mobile            String
+  email             String?
+  age               Int?
+  gender            String?
+  problemDescription String?
+  date              DateTime @db.Date
+  time              String // "HH:mm"
+  slotGuard         String   @default("1")
+  status            String   @default("PENDING") // PENDING | CONFIRMED | CANCELLED | COMPLETED
+  statusReason      String?  // why cancelled / rescheduled etc.
+  adminNotes        String?
+  source            String   @default("WEBSITE") // WEBSITE | ADMIN | WALKIN
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  patient      Patient     @relation(fields: [patientId], references: [id])
+  doctor       Doctor      @relation(fields: [doctorId], references: [id])
+  department   Department? @relation(fields: [departmentId], references: [id])
+  notifications Notification[]
+
+  @@unique([doctorId, date, time, slotGuard])
+  @@index([status])
+  @@index([mobile])
+  @@index([date])
+}
+
+// ---------- Website content modules ----------
+
+model Service {
+  id           Int      @id @default(autoincrement())
+  title        String
+  titleHi      String?
+  description  String?
+  descriptionHi String?
+  icon         String?
+  category     String   @default("DEPARTMENT") // DEPARTMENT | FACILITY | WHY_US
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+}
+
+model GalleryImage {
+  id        Int      @id @default(autoincrement())
+  title     String?
+  imageUrl  String
+  caption   String?
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+}
+
+model Testimonial {
+  id         Int      @id @default(autoincrement())
+  patientName String
+  city       String?
+  rating     Int      @default(5) // 1..5
+  message    String
+  isSample   Boolean  @default(true)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+}
+
+// Key-value store for editable site content + contact details
+model Setting {
+  key        String   @id
+  value      String   @db.Text
+  updatedAt  DateTime @updatedAt
+}
+
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String?
+  phone     String
+  subject   String?
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// ---------- Ops ----------
+
+// channel: WHATSAPP | SMS | EMAIL | ADMIN
+// status:  QUEUED | SENT | SKIPPED_NO_CREDENTIALS | FAILED
+model Notification {
+  id               Int      @id @default(autoincrement())
+  channel          String
+  recipient        String?
+  message          String @db.Text
+  status           String   @default("QUEUED")
+  statusDetail     String?  // provider response or skip reason
+  appointmentId    Int?
+  createdAt        DateTime @default(now())
+
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actorType String   // ADMIN | PATIENT | SYSTEM
+  actorId   Int?
+  actorName String?
+  action    String   // e.g. APPOINTMENT_CONFIRMED
+  entity    String
+  entityId  Int?
+  detail    String? @db.Text
+  createdAt DateTime @default(now())
+
+  // Loose references (no FK) — audit rows must survive even if the actor is deleted.
+  @@index([actorType, actorId])
+}
