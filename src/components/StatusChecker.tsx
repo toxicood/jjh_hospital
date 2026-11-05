@@ -95,6 +95,19 @@ export default function StatusChecker() {
             <p><b>Date:</b> {result.date} · <b>Time:</b> {result.time} IST</p>
             <p><b>Booked on:</b> {result.createdAt}</p>
           </dl>
+          {["PENDING", "CONFIRMED"].includes(result.status) && (
+            <div className="mt-5 border-t border-slate-100 pt-4">
+              <a
+                href={`/api/appointments/slip?code=${encodeURIComponent(result.apptCode)}&mobile=${encodeURIComponent(mobile.replace(/\D/g, ""))}`}
+                className="btn btn-primary"
+              >
+                📄 Download OPD Slip PDF — पर्ची डाउनलोड करें
+              </a>
+              <p className="mt-2 text-xs text-slate-500">
+                Yahi slip reception par dikha sakte hain. Isi PDF ka ek copy aapke email par bhi bhej diya gaya hai.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

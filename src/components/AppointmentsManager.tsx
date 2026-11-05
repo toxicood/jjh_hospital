@@ -33,6 +33,23 @@ interface Ref {
 
 const STATUSES = ["PENDING", "CONFIRMED", "CANCELLED", "COMPLETED"];
 
+/** Click-to-chat link — opens WhatsApp with a ready-made status message for the patient. */
+function waLink(a: Appt): string {
+  const phone = a.mobile.replace(/[^\d]/g, "").replace(/^91/, "");
+  const lines: string[] = [`🙏 *Jeevan Jyoti Hospital, Sirsa* — Appointment ${a.apptCode}`];
+  if (a.status === "PENDING") {
+    lines.push("आपका पंजीकरण प्राप्त हो गया है — confirmation का इंतज़ार है।", "");
+  } else if (a.status === "CONFIRMED") {
+    lines.push("हमारे पास आपकी appointment book है।", "");
+  } else if (a.status === "CANCELLED") {
+    lines.push("आपकी appointment cancel कर दी गई है।", `कारण: ${a.statusReason || "—"}`, "");
+  } else if (a.status === "COMPLETED") {
+    lines.push("आपकी appointment पूरी हो चुकी है — धन्यवाद।", "");
+  }
+  lines.push(`👤 ${a.fullName}`, `🩺 ${a.doctorName}${a.departmentName ? ` (${a.departmentName})` : ""}`, `📅 ${a.date} · ⏰ ${a.time} IST`, "", "किसी बदलाव के लिए यहाँ reply करें या अस्पताल call करें। धन्यवाद।");
+  return `https://wa.me/91${phone}?text=${encodeURIComponent(lines.join("\n"))}`;
+}
+
 export default function AppointmentsManager() {
   const [rows, setRows] = useState<Appt[]>([]);
   const [doctors, setDoctors] = useState<Ref[]>([]);
@@ -185,6 +202,13 @@ export default function AppointmentsManager() {
                         </>
                       )}
                       <button onClick={() => printReceipt(a)} className="btn btn-sm btn-secondary">🖨️ Print<br /></button>
+                      <a href={`/api/admin/appointments/${a.id}/slip`} className="btn btn-sm btn-secondary">📄 OPD Slip<br /></a>
+                      <a
+                        href={waLink(a)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-sm bg-green-500 text-white hover:bg-green-600"
+                      >💬 WhatsApp<br /></a>
                     </div>
                   </td>
                 </tr>

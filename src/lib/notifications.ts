@@ -20,6 +20,28 @@ export interface OutboundMessage {
   recipient?: string | null; // phone (digits) or email
   message: string;
   appointmentId?: number | null;
+  /** Optional email subject override (hospital copies use their own line). */
+  subject?: string;
+}
+
+/** Hospital/doctor inbox — gets a copy of every email notification.
+ *  (A phone push is not possible without a paid SMS/WhatsApp gateway; the
+ *  Gmail copy is the reliable channel that works today.) */
+export function hospitalInbox(): string | undefined {
+  return process.env.HOSPITAL_NOTIFY_EMAIL || process.env.SMTP_USER || undefined;
+}
+
+/** Send the hospital's own copy of an appointment email (details + OPD slip PDF). */
+export async function notifyHospitalCopy(appointmentId: number, eventLine: string): Promise<void> {
+  const inbox = hospitalInbox();
+  if (!inbox) return;
+  await notify({
+    channel: "EMAIL",
+    recipient: inbox,
+    message: eventLine,
+    appointmentId,
+    subject: `Jeevan Jyoti Hospital — ${eventLine.slice(0, 60)}`,
+  });
 }
 
 async function postJson(url: string, token: string, payload: unknown): Promise<string> {
@@ -37,12 +59,52 @@ async function postJson(url: string, token: string, payload: unknown): Promise<s
   return text.slice(0, 500);
 }
 
-async function sendEmail(msg: OutboundMessage): Promise<string> {
+const SUBJECTS: Record<string, string> = {
+  PENDING: "Jeevan Jyoti Hospital — Appointment received (OPD Slip attached)",
+  CONFIRMED: "Jeevan Jyoti Hospital — Appointment CONFIRMED (OPD Slip attached)",
+  CANCELLED: "Jeevan Jyoti Hospital — Appointment cancelled",
+  COMPLETED: "Jeevan Jyoti Hospital — Visit completed. Thank you!",
+};
+
+async function sendEmail(msg: OutboundMessage): Promise<{ status: string; slipAttached: boolean }> {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   if (!host || !user || !pass) {
-    return "SKIPPED_NO_CREDENTIALS";
+    return { status: "SKIPPED_NO_CREDENTIALS", slipAttached: false };
+  }
+  // Attach the OPD slip PDF when the email concerns an appointment in an
+  // active state (booking received / confirmed). Skipped for cancelled.
+  let attachments: Array<{ filename: string; content: Buffer }> = [];
+  let subject = "Jeevan Jyoti Hospital — Appointment";
+  let html: string | undefined;
+  let slipAttached = false;
+  if (msg.appointmentId) {
+    try {
+      const appt = await prisma.appointment.findUnique({
+        where: { id: msg.appointmentId },
+        select: { status: true, apptCode: true },
+      });
+      if (appt) {
+        subject = msg.subject ?? SUBJECTS[appt.status] ?? subject;
+        if (appt.status === "PENDING" || appt.status === "CONFIRMED") {
+          const { buildSlipForAppointment } = await import("@/lib/opd-slip-pdf");
+          const pdf = await buildSlipForAppointment(msg.appointmentId);
+          if (pdf) {
+            attachments = [{ filename: `OPD-Slip-${appt.apptCode}.pdf`, content: pdf }];
+            slipAttached = true;
+            html = `<div style="font-family:Arial,sans-serif;max-width:560px">
+              <p>Namaste,</p>
+              <p>Aapki <b>OPD Slip PDF</b> is email ke saath attached hai 📎 — booking/reception me dikhane ke liye print karein ya phone me rakh lein.</p>
+              <p>Appointment code: <b>${appt.apptCode}</b></p>
+              <p style="color:#777;font-size:12px">Jeevan Jyoti Hospital, Sirsa — Near R.S.D. School, Dabwali Road · Ph. 01666-231100</p>
+            </div>`;
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[email] OPD slip generation failed — sending email without attachment", err);
+    }
   }
   const transporter = nodemailer.createTransport({
     host,
@@ -53,10 +115,12 @@ async function sendEmail(msg: OutboundMessage): Promise<string> {
   await transporter.sendMail({
     from: process.env.SMTP_FROM || user,
     to: msg.recipient,
+    subject,
     text: msg.message,
-    subject: "Jeevan Jyoti Hospital — Appointment",
+    html,
+    attachments,
   });
-  return "SENT";
+  return { status: "SENT", slipAttached };
 }
 
 async function sendHttpsProvider(
@@ -86,8 +150,10 @@ export async function notify(msg: OutboundMessage): Promise<{ status: string; de
         status = "SKIPPED_NO_CREDENTIALS";
         detail = "Recipient email missing";
       } else {
-        status = await sendEmail(msg);
-        detail = status === "SENT" ? undefined : "SMTP not configured (SMTP_HOST/USER/PASS)";
+        const res = await sendEmail(msg);
+        status = res.status;
+        if (status === "SENT") detail = res.slipAttached ? "SENT with OPD Slip PDF attached" : undefined;
+        else detail = "SMTP not configured (SMTP_HOST/USER/PASS)";
       }
     } else if (msg.channel === "WHATSAPP") {
       status = await sendHttpsProvider(msg, process.env.WHATSAPP_API_URL, process.env.WHATSAPP_API_TOKEN);

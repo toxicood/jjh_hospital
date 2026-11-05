@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdmin, isFailed } from "@/lib/admin";
 import { audit } from "@/lib/audit";
-import { notify } from "@/lib/notifications";
+import { notify, notifyHospitalCopy } from "@/lib/notifications";
 import { generateSlots, weekdayOf, fromDateKey } from "@/lib/slots";
 import { z } from "zod";
 
@@ -50,15 +50,18 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     await Promise.all([
       notify({ channel: "SMS", recipient: appt.mobile, message: msg, appointmentId: appt.id }),
       ...(appt.email ? [notify({ channel: "EMAIL", recipient: appt.email, message: msg, appointmentId: appt.id })] : []),
+      // Hospital/doctor's own Gmail copy (details + OPD slip where applicable)
+      notifyHospitalCopy(appt.id, `${msg} [Update for ${appt.fullName} / ${appt.mobile}]`),
     ]);
   };
   const timeLabel = `${appt.time} IST`;
   const dateKey = new Date(appt.date).toISOString().slice(0, 10);
 
   if (action === "CONFIRM" || action === "COMPLETE") {
+    const newStatus = action === "CONFIRM" ? "CONFIRMED" : "COMPLETED";
     const updated = await prisma.appointment.update({
       where: { id },
-      data: { status: action, statusReason: reason || STATUS_REASONS[action] },
+      data: { status: newStatus, statusReason: reason || STATUS_REASONS[action] },
     });
     await audit({
       actorType: "ADMIN",

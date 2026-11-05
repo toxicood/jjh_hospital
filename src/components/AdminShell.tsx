@@ -7,6 +7,7 @@ import { useState, type ReactNode } from "react";
 const MENU = [
   { href: "/admin", label: "Dashboard", icon: "📊" },
   { href: "/admin/appointments", label: "Appointments", icon: "📅" },
+  { href: "/admin/opd-report", label: "OPD Report", icon: "📋" },
   { href: "/admin/doctors", label: "Doctors", icon: "👨‍⚕️" },
   { href: "/admin/departments", label: "Departments", icon: "🏥" },
   { href: "/admin/patients", label: "Patients", icon: "🧑‍🤝‍🧑" },

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { appointmentCreateSchema, zodFieldErrors } from "@/lib/validation";
 import { generateApptCode } from "@/lib/appt-code";
-import { notify } from "@/lib/notifications";
+import { notify, notifyHospitalCopy, hospitalInbox } from "@/lib/notifications";
 import { audit } from "@/lib/audit";
 import { fromDateKey, toDateKey, weekdayOf } from "@/lib/slots";
 
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
   // Patient: find by mobile (auto-create lightweight record for first-time bookers)
   const patient = await prisma.patient.upsert({
     where: { mobile: v.mobile },
-    update: { fullName: v.fullName },
+    update: { fullName: v.fullName, email: v.email ?? undefined, age: v.age ?? undefined, gender: v.gender ?? undefined },
     create: { fullName: v.fullName, mobile: v.mobile, email: v.email || null, age: v.age, gender: v.gender },
   });
 
@@ -131,6 +131,7 @@ export async function POST(req: Request) {
 
     // Admin in-app alert (always) + optional outbound channels
     const timeLabel = v.time;
+    const hospitalLine = `NEW BOOKING ${appointment.apptCode}: ${v.fullName} (${v.mobile}${v.age ? `, ${v.age}Y` : ""} ${v.gender?.[0] || ""}) — ${doctor.fullName}${doctor.department ? ` (${doctor.department.name})` : ""} on ${dateKey} at ${timeLabel}${v.problemDescription ? ` · Problem: ${v.problemDescription}` : ""}.`;
     await Promise.all([
       notify({
         channel: "ADMIN",
@@ -144,9 +145,11 @@ export async function POST(req: Request) {
         message: `Booking received at Jeevan Jyoti Hospital. ID ${appointment.apptCode} — ${doctor.fullName}, ${dateKey} ${timeLabel}. Status: pending.`,
         appointmentId: appointment.id,
       }),
-      ...(patient.email
+      ...(patient.email && patient.email !== hospitalInbox()
         ? [notify({ channel: "EMAIL", recipient: patient.email, message: `Your appointment ID is ${appointment.apptCode} (${dateKey} ${timeLabel}, ${doctor.fullName}). It is pending confirmation.`, appointmentId: appointment.id })]
         : []),
+      // Hospital/doctor's own Gmail copy with details + OPD slip PDF
+      notifyHospitalCopy(appointment.id, hospitalLine),
     ]);
 
     return NextResponse.json(
